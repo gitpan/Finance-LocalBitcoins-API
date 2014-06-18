@@ -212,8 +212,8 @@ sub new             { (bless {} => shift)->init(@_)                  }
 sub path            { URI->new(shift->http_request->uri)->path       }
 sub request_content { shift->request->request_content                }
 sub json            { shift->{json} ||= JSON->new                    }
-sub private         { shift->request->is_private                     }
 sub is_success      { defined shift->response                        }
+sub private         { shift->request->is_private                     }
 sub public          { not shift->private                             }
 sub attributes      { ATTRIBUTES                                     }
 
@@ -278,6 +278,46 @@ sub class_action {
     return $self->send ? $self->response : undef;
 }
 
+# These additional routines will allow you to easily encrypt your API secret using a similar but random text string as a key.
+# Generate and store a random string of 40 hex chars in your script.
+#   perl -e 'use Finance::CaVirtex::API qw(string_encrypt); print "Encrypted: %s\n", string_encrypt('put your token here', $random_key);
+# to output the cyphertext of the real secret encrypted using your key.
+# Your script should then load the cyphertext from an external file and call this:
+#   my $api_secret = string_decrypt($cyphertext, $random_key);
+# Since both the random_key and the cyphertext are in separate files, a breach would require both files to be compromised.
+# If you also put the token into a database table that is accessed during runtime... then you are further protected.
+# This setup would require 3 distinct components which would all need to be compromised to gain unwanted access to your API keys and functions.
+#
+# From the command line, you can generate a set of semi-random strings that should be good enough for this using:
+#  perl -e 'print join("",("a".."z",0..9)[map rand$_,(36) x 22])."\n"for 1..20;'
+#
+# select one of those as your random_key.
+#
+
+# encryption works by assigning an ordinal value to each character '0' = 0 ... 'Z' = 35
+# these values are then added for each character in the cypher and the random key.
+# the modulus of the sum is then taken to remain within the 36 available characters.
+# this number is then converted back to character.
+# once each character of the string is calculated, the complete cyphertext is generated.
+#
+# the end result is that we are adding the secret string to the random key string to obtain the cyphertext:
+#    Cypher = Secret + Key
+#
+# decryption is exactly like encryption except we take the difference of each character
+# instead of the sum. 
+#
+# the end result is thatIn this way we are subtracting the random key from the cyphertext to get back the secret string.
+#    Secret = Cypher - Key
+#
+# I believe this method is equivalent to XOR encryption, which is very strong as long as the key is random and kept secret.
+#
+sub alphanum_to_digit { ord($_[0]) > 57 ? ord($_[0]) - 87 : ord($_[0]) - 48  }
+sub digit_to_alphanum { chr($_[0]  >  9 ?     $_[0]  + 87 :     $_[0]  + 48) }
+sub string_encrypt    { join '', map(digit_to_alphanum((alphanum_to_digit(substr $_[0], $_, 1) + alphanum_to_digit(substr $_[1], $_, 1)) % 36), 0 .. length($_[0]) - 1) }
+sub string_decrypt    { join '', map(digit_to_alphanum((alphanum_to_digit(substr $_[0], $_, 1) - alphanum_to_digit(substr $_[1], $_, 1)) % 36), 0 .. length($_[0]) - 1) }
+sub gen_random_key    { join("",("a".."f",0..9)[map rand$_,(16) x 40]) }
+
+
 1;
 
 __END__
@@ -318,11 +358,11 @@ Finance::LocalBitcoins::API - Perl extension for handling the LocalBitcoins API 
 
 
   # A more useful example...
-  my $api  = Finance::LocalBitcoins::API->new(key => $key, client_id => $client_id);
-  my $order = $api->order(currencypair => 'USDCAD', mode => 'bid', amount => '4.5', price => '1000.00');
+  my $api  = Finance::LocalBitcoins::API->new(token => $token);
+  my $contacts = $api->get_contacts();
 
-  if ($order) {
-      printf "The LocalBitcoins invoice ID is %s. You can see it here: %s\n", @{$order}{qw(id url)};
+  if ($contacts) {
+      printf "You have %d contacts\n", scalar @$contacts;
   }
   else {
       printf "An error occurred: %s\n", $api->error;
@@ -335,74 +375,40 @@ the connection, authenticatino and an errors in between.
 
 You create an object like this:
 
-    my $caviertex = Finance::LocalBitcoins::API->new(%params);
+    my $api = Finance::LocalBitcoins::API->new(%params);
     # required param keys: token
 
 The methods you call that match the API spec are:
 
-    $api-> orderbook(%params);
-    # required: currencypair
+    $api->orderbook(%params);
+    # required: currency
 
-    $api-> tradebook(%params);
-    # required: currencypair
-    # optional: days, startdate, enddate
+    $api->tradebook(%params);
+    # required: currency
+    # optional: since
 
-    $api-> ticker(%params);
-    # required: currencypair 
+    $api->ticker();
+    # a ticker for all currencies
 
-    $api-> balance(%params);
-
-    $api-> transactions(%params);
-    # required: currencypair
-    # optional: days, startdate, enddate
-
-    $api-> trade_history(%params);
-    # required: currencypair
-    # optional: days, startdate, enddate
-
-    $api-> order_history(%params);
-    # required: currencypair
-    # optional: days, startdate, enddate
-
-    $api-> order(%params);
-    # required: currencypair, mode, amount, price
-
-    $api-> order_cancel(%params);
-    # required: id
-
-    $api-> withdraw(%params);
-    # required: amount, currency, address
-
+    ...etc...
 
 =head1 REQUEST PARAMETERS:
 
-    currencypair - a string. "BTCCAD", "LTCCAD", "BTCLTC"
+    currency - a string. "CAD", "USD", "GBP", "EUR", etc.
 
-    days - an integer
+    since - a date in the format 'YYYY-MM-DD'
 
-    startdate, enddate - a date in the format 'YYYY-MM-DD'
-
-    mode -  a string. "buy", "sell"
-
-    amount - a quantity of BTC or LTC as a floating point string (up to 8 decimals)
-
-    price - a string dollar value. (up to 5 decimals)
-
-    id - an order ID.
-
-    currency - a string. "BTC", "LTC"
-
-    address - a BTC or LTC wallet address
+    ...etc...
 
 =head1 METHODS
 
 =head2 new()
 
-    my $api = Finance::LocalBitcoins::API->new(key => $key, client_id => $client_id);
+    my $api = Finance::LocalBitcoins::API->new(token => $token);
 
 Create a new Finance::LocalBitcoins::API object.
 token is required.
-These values are provided by Bitstamp through their online administration interface.
+These values are provided by LocalBitcoins through their online administration interface.
 
 
 =head2 Other Methods
@@ -414,7 +420,7 @@ The methods you will use are discussed in the DESCRIPTION. For details on valid 
 =head2 token()
 
 These are usually set during object instantiation. But you can set and retrieve them through these attributes.
-The last set values will always be used in the next action request. These values are obtained from LocalBitcoins through your account.
+The last set values will always be used in the next action request. These values are obtained from LocalLocalBitcoinsBitcoins through your account.
 
 =head2 is_ready()
 
@@ -459,7 +465,7 @@ In these cases we are allowing LocalBitcoins to decide what is and is not valid 
 If the input values are invalid, we expect LocalBitcoins to provide an appropriate response and that is the message we will return to the caller (through $api->error).
 
 This module does not validate the response from LocalBitcoins.
-In general it will return success when any json response is provided by Bitstamp without the 'error' key.
+In general it will return success when any json response is provided by LocalBitcoins without the 'error' key.
 The SSL certificate is verified automatically by LWP, so the response you will get is very likely from LocalBitcoins itself.
 If there is an 'error' key in the json response, then that error is put into the $api->error attribute.
 If there is an 'error' parsing the response from LocalBitcoins, then the decoding error from json is in the $api->error attribute.
